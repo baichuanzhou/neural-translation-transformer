@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import math
 from torch import Tensor
-from torch.nn import Transformer
 
 
 class TokenEmbedding(nn.Module):

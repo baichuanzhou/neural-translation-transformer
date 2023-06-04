@@ -242,9 +242,9 @@ def train(model: nn.Module,
         random_index = random.randint(0, len(list(train_iter)))
         src_sentence, tgt_sentence = (list(train_iter))[random_index]
         translate_sentence = translate(model, src_sentence)
-        print('>', src_sentence)
-        print('=', tgt_sentence)
-        print('<', translate_sentence)
+        print('> Input    Language:', src_sentence)
+        print('= True  Translation:', tgt_sentence)
+        print('< Model Translation:', translate_sentence)
 
 
 def main():
