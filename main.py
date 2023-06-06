@@ -4,10 +4,10 @@ from torchtext.datasets import multi30k, Multi30k
 from typing import Iterable, List, Union, Any
 import torch
 import torch.nn as nn
-from transformer import EncoderDecoder
+from encoder_decoder import EncoderDecoder
 import torch.optim as optim
 from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 from timeit import default_timer as timer
 import random
 
@@ -22,12 +22,17 @@ NUM_EPOCHS = 20
 
 SRC_LANGUAGE = "de"  # source language is german
 TGT_LANGUAGE = "en"  # our target is to translate german to english
+TRANSLATE_PAIR = (SRC_LANGUAGE, TGT_LANGUAGE)
+# Define special symbols and indices
+UNK_IDX, PAD_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
+# Make sure the tokens are in order of their indices to properly insert them in vocab
+special_symbols = ['<unk>', '<pad>', '<bos>', '<eos>']
 
 token_transform = {}
 vocab_transform = {}
 
-token_transform[SRC_LANGUAGE] = get_tokenizer('spacy', language='de_core_news_sm')
-token_transform[TGT_LANGUAGE] = get_tokenizer('spacy', language='en_core_web_sm')
+token_transform[SRC_LANGUAGE] = get_tokenizer('spacy', language='de_core_news_md')
+token_transform[TGT_LANGUAGE] = get_tokenizer('spacy', language='en_core_web_md')
 
 
 def yield_tokens(data_iter: Iterable, language: str) -> List[str]:
@@ -35,11 +40,6 @@ def yield_tokens(data_iter: Iterable, language: str) -> List[str]:
     for data_sample in data_iter:
         yield token_transform[language](data_sample[language_index[language]])
 
-
-# Define special symbols and indices
-UNK_IDX, PAD_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
-# Make sure the tokens are in order of their indices to properly insert them in vocab
-special_symbols = ['<unk>', '<pad>', '<bos>', '<eos>']
 
 for ln in [SRC_LANGUAGE, TGT_LANGUAGE]:
     # Training data Iterator
@@ -75,20 +75,7 @@ def create_mask(src, tgt):
     return src_mask.to(DEVICE), tgt_mask.to(DEVICE), src_padding_mask.to(DEVICE), tgt_padding_mask.to(DEVICE)
 
 
-"""
-    Here define the parameters for transformer
-"""
-SRC_VOCAB_SIZE = len(vocab_transform[SRC_LANGUAGE])
-TGT_VOCAB_SIZE = len(vocab_transform[TGT_LANGUAGE])
-D_MODEL = 512
-NHEAD = 8
-FFN_HID_DIM = 512
-BATCH_SIZE = 128
-NUM_ENCODER_LAYERS = 3
-NUM_DECODER_LAYERS = 3
-
-
-def adjust_learning_rate(optimizer, d_model, step_num, warmup_steps=3000):
+def adjust_learning_rate(optimizer, d_model, step_num, warmup_steps=4000):
     lr = d_model ** -0.5 * min(step_num ** -0.5, step_num * warmup_steps ** -1.5)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
@@ -118,34 +105,24 @@ for ln in [SRC_LANGUAGE, TGT_LANGUAGE]:
                                                tensor_transform)  # Add BOS/EOS and create tensor
 
 
-# function to collate data samples into batch tensors
-def collate_fn(batch):
-    src_batch, tgt_batch = [], []
-    for src_sample, tgt_sample in batch:
-        src_batch.append(text_transform[SRC_LANGUAGE](src_sample.rstrip("\n")))
-        tgt_batch.append(text_transform[TGT_LANGUAGE](tgt_sample.rstrip("\n")))
-
-    src_batch = pad_sequence(src_batch, padding_value=PAD_IDX)
-    tgt_batch = pad_sequence(tgt_batch, padding_value=PAD_IDX)
-    return src_batch, tgt_batch
-
-
 class TrainState:
     steps: int = 0   # total steps taken
     samples: int = 0    # samples used
     tokens: int = 0     # tokens processed
 
 
-def train_epoch(model: nn.Module, optimizer: torch.optim, criterion: nn.Module, train_state: TrainState):
+def train_step(model: nn.Module,
+               optimizer: torch.optim,
+               criterion: nn.Module,
+               train_state: TrainState,
+               train_loader: DataLoader):
     model.train()
     model = model.to(DEVICE)
     losses = 0
-    train_iter = Multi30k(split='train', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
-    train_loader = DataLoader(train_iter, batch_size=BATCH_SIZE, collate_fn=collate_fn, shuffle=True)
 
     for src, tgt in train_loader:
         src = src.to(DEVICE)
-        tgt = tgt.to(DEVICE)
+        tgt = tgt.type(torch.long).to(DEVICE)
 
         tgt_input = tgt[:-1, :]
 
@@ -159,6 +136,7 @@ def train_epoch(model: nn.Module, optimizer: torch.optim, criterion: nn.Module, 
         loss.backward()
         train_state.steps += 1
 
+        adjust_learning_rate(optimizer, model.d_model, train_state.steps)
         optimizer.step()
         losses += loss.item()
 
@@ -168,11 +146,10 @@ def train_epoch(model: nn.Module, optimizer: torch.optim, criterion: nn.Module, 
     return losses / len(list(train_loader))
 
 
-def evaluate(model: nn.Module, criterion: nn.Module):
+def evaluate(model: nn.Module,
+             criterion: nn.Module,
+             val_loader: DataLoader):
     losses = 0
-
-    val_iter = Multi30k(split='valid', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
-    val_loader = DataLoader(val_iter, batch_size=BATCH_SIZE, collate_fn=collate_fn)
     model.eval()
     with torch.no_grad():
         for src, tgt in val_loader:
@@ -224,42 +201,88 @@ def translate(model: nn.Module, src_sentence: str):
 
 def train(model: nn.Module,
           optimizer: optim,
-          criterion: Union[nn.Module, Any]
-          ):
+          criterion: Union[nn.Module, Any],
+          train_loader: DataLoader,
+          val_loader: DataLoader,
+          test_loader: Union[DataLoader, None] = None,
+          test_examples: int = 0):
     model.train()
     model = model.to(DEVICE)
     train_state = TrainState()
-    for epoch in range(1, NUM_EPOCHS + 1):
+    for epoch in range(NUM_EPOCHS):
         start_time = timer()
-        train_loss = train_epoch(model, optimizer, criterion, train_state)
+        train_loss = train_step(model, optimizer, criterion, train_state, train_loader)
         end_time = timer()
-
-        val_loss = evaluate(model, criterion)
+        val_loss = evaluate(model, criterion, val_loader)
         print(f"Epoch: {epoch}, Train loss: {train_loss: .3f}, Val loss: {val_loss: .3f}, "
               f""f"Epoch time = {(end_time - start_time): .3f}s, Steps: {train_state.steps}, "
               f"LR: {optimizer.param_groups[0]['lr']: .6f}, Tokens Processed: {train_state.tokens}, "
               f"Samples Seen: {train_state.samples}")
-        random_index = random.randint(0, len(list(train_iter)))
-        src_sentence, tgt_sentence = (list(train_iter))[random_index]
+        random_index = random.randint(0, len(list(train_loader.dataset)))
+        src_sentence, tgt_sentence = list(train_loader.dataset)[random_index]
         translate_sentence = translate(model, src_sentence)
         print('> Input    Language:', src_sentence)
         print('= True  Translation:', tgt_sentence)
         print('< Model Translation:', translate_sentence)
 
+    if test_loader is not None:
+        print("********Testing*************")
+        start_time = timer()
+        test_loss = evaluate(model, criterion, test_loader)
+        end_time = timer()
+        print(f"Test loss: {test_loss: .3f}, Test time: {(end_time - start_time): .3f}s")
+        for i in range(test_examples):
+            random_index = random.randint(0, len(list(test_loader.dataset)))
+            src_sentence, tgt_sentence = list(test_loader.dataset)[random_index]
+            translate_sentence = translate(model, src_sentence)
+            print('> Input    Language:', src_sentence)
+            print('= True  Translation:', tgt_sentence)
+            print('< Model Translation:', translate_sentence)
+
 
 def main():
+    # Define Hyper-parameters
+    SRC_VOCAB_SIZE = len(vocab_transform[SRC_LANGUAGE])
+    TGT_VOCAB_SIZE = len(vocab_transform[TGT_LANGUAGE])
+    D_MODEL = 512
+    NHEAD = 8
+    FFN_HID_DIM = 2048
+    BATCH_SIZE = 128
+    NUM_ENCODER_LAYERS = 6
+    NUM_DECODER_LAYERS = 6
+
+    # function to collate data samples into batch tensors
+    def collate_fn(batch):
+        src_batch, tgt_batch = [], []
+        for src_sample, tgt_sample in batch:
+            src_batch.append(text_transform[SRC_LANGUAGE](src_sample.rstrip("\n")))
+            tgt_batch.append(text_transform[TGT_LANGUAGE](tgt_sample.rstrip("\n")))
+
+        src_batch = pad_sequence(src_batch, padding_value=PAD_IDX)
+        tgt_batch = pad_sequence(tgt_batch, padding_value=PAD_IDX)
+        return src_batch, tgt_batch
+
     transformer = EncoderDecoder(NUM_ENCODER_LAYERS, NUM_DECODER_LAYERS, D_MODEL,
                                  NHEAD, SRC_VOCAB_SIZE, TGT_VOCAB_SIZE, FFN_HID_DIM)
     transformer = transformer.to(DEVICE)
-    for p in transformer.parameters():
-        if p.dim() > 1:
-            nn.init.xavier_uniform_(p)
+
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX)
+
+    train_iter = Multi30k(split='train', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
+    train_loader = DataLoader(train_iter, batch_size=BATCH_SIZE, collate_fn=collate_fn, shuffle=True)
+    val_iter = Multi30k(split='valid', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
+    val_loader = DataLoader(val_iter, batch_size=BATCH_SIZE, collate_fn=collate_fn)
+    test_iter = Multi30k(split='test', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
+    test_loader = DataLoader(test_iter, batch_size=BATCH_SIZE, collate_fn=collate_fn)
+
     optimizer = optim.Adam(transformer.parameters(), lr=0.0001, betas=(0.9, 0.98), eps=1e-9)
     train(transformer,
           optimizer,
-          criterion)
-    print(translate(transformer, "Eine Gruppe von Menschen steht vor einem Iglu ."))
+          criterion,
+          train_loader,
+          val_loader,
+          test_loader,
+          test_examples=10)
 
 
 if __name__ == '__main__':

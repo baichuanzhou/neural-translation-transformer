@@ -41,6 +41,8 @@ class EncoderDecoder(nn.Module):
         self.tgt_tok_emb = TokenEmbedding(tgt_vocab_size, d_model)
         self.pe = PositionalEncoding(d_model, dropout)
 
+        self._init_params()
+
     def forward(self,
                 src: torch.Tensor,
                 tgt: torch.Tensor,
@@ -60,6 +62,11 @@ class EncoderDecoder(nn.Module):
 
     def decode(self, tgt: torch.Tensor, memory: torch.Tensor, tgt_mask: torch.Tensor) -> torch.Tensor:
         return self.transformer.decoder(self.pe(self.tgt_tok_emb(tgt)), memory, tgt_mask)
+
+    def _init_params(self):
+        for param in self.parameters():
+            if param.dim() > 1:
+                nn.init.xavier_uniform_(param)
 
 
 # helper Module that adds positional encoding to the token embedding to introduce a notion of word order.
