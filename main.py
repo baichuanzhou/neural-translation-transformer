@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, RandomSampler
 from timeit import default_timer as timer
 import random
 import argparse
+import os
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--lr', type=float, default=0.0001, help='set learning rate')
@@ -287,6 +288,9 @@ def main():
           val_loader,
           test_loader,
           test_examples=10)
+    if args.save_dir is not None:
+        torch.save(transformer.state_dict(), os.path.join(args.save_dir, 'model_state_dict.pth'))
+        torch.save(optimizer.state_dict(), os.path.join(args.save_dir, 'optimizer_state_dict.pth'))
 
 
 if __name__ == '__main__':
