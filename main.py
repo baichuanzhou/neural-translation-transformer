@@ -10,6 +10,19 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, RandomSampler
 from timeit import default_timer as timer
 import random
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--lr', type=float, default=0.0001, help='set learning rate')
+parser.add_argument('--adjust_lr', type=bool, default=True, help='whether or not adjust learning rate')
+parser.add_argument('--num_head', type=int, default=8, help='number of attention head')
+parser.add_argument('--epochs', type=int, default=20, help='number of training epoch')
+parser.add_argument('--ffn_dim', type=int, default=512, help='number of hidden dimension of mlp head')
+parser.add_argument('--d_model', type=int, default=512, help='embedding dimension')
+parser.add_argument('--encoder_layers', type=int, default=3, help='number of encoder layers')
+parser.add_argument('--decoder_layers', type=int, default=3, help='number of decoder layers')
+parser.add_argument('--save_dir', default='encoder_decoder_outputs', type=str, help='folder where you save models')
+parser.add_argument('--batch_size', type=int, default=128, help='batch size')
 
 torch.manual_seed(42)
 
@@ -241,15 +254,6 @@ def train(model: nn.Module,
 
 
 def main():
-    # Define Hyper-parameters
-    SRC_VOCAB_SIZE = len(vocab_transform[SRC_LANGUAGE])
-    TGT_VOCAB_SIZE = len(vocab_transform[TGT_LANGUAGE])
-    D_MODEL = 512
-    NHEAD = 8
-    FFN_HID_DIM = 512
-    BATCH_SIZE = 128
-    NUM_ENCODER_LAYERS = 3
-    NUM_DECODER_LAYERS = 3
 
     # function to collate data samples into batch tensors
     def collate_fn(batch):
@@ -275,7 +279,7 @@ def main():
     test_iter = Multi30k(split='test', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
     test_loader = DataLoader(test_iter, batch_size=BATCH_SIZE, collate_fn=collate_fn)
 
-    optimizer = optim.Adam(transformer.parameters(), lr=0.0001, betas=(0.9, 0.98), eps=1e-9)
+    optimizer = optim.Adam(transformer.parameters(), lr=LR, betas=(0.9, 0.98), eps=1e-9)
     train(transformer,
           optimizer,
           criterion,
@@ -286,4 +290,16 @@ def main():
 
 
 if __name__ == '__main__':
+    args = parser.parse_args()
+    # Define Hyper-parameters
+    SRC_VOCAB_SIZE = len(vocab_transform[SRC_LANGUAGE])
+    TGT_VOCAB_SIZE = len(vocab_transform[TGT_LANGUAGE])
+    D_MODEL = args.d_model
+    NHEAD = args.num_head
+    FFN_HID_DIM = args.ffn_dim
+    BATCH_SIZE = args.batch_size
+    NUM_ENCODER_LAYERS = args.encoder_layers
+    NUM_DECODER_LAYERS = args.decoder_layers
+    LR = args.lr
+    NUM_EPOCHS = args.epochs
     main()
