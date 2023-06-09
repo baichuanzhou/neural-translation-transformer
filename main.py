@@ -246,10 +246,10 @@ def main():
     TGT_VOCAB_SIZE = len(vocab_transform[TGT_LANGUAGE])
     D_MODEL = 512
     NHEAD = 8
-    FFN_HID_DIM = 2048
+    FFN_HID_DIM = 512
     BATCH_SIZE = 128
-    NUM_ENCODER_LAYERS = 6
-    NUM_DECODER_LAYERS = 6
+    NUM_ENCODER_LAYERS = 3
+    NUM_DECODER_LAYERS = 3
 
     # function to collate data samples into batch tensors
     def collate_fn(batch):
